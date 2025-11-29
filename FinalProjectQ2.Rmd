@@ -1,0 +1,135 @@
+---
+title: "FinalProject_Question2"
+author: "Sid Tekumalla"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggplot2)
+library(dplyr)
+library(caret)
+
+data <- read.csv("HS119_members.csv")
+
+# Create age column
+data$age <- 2025 - data$born
+
+# Remove rows where age cannot be calculated
+data <- data %>% filter(!is.na(age))
+
+
+# Convert party_code to factor with labels
+data$party <- factor(data$party_code, 
+                     levels = c(100, 200, 328),
+                     labels = c("Democrat", "Republican", "Independent"))
+
+```
+
+# Age and Ideology
+
+Using age data, is there a correlation between member age and ideological positioning in 2025, controlling for party? If so, are younger Republicans/Democrats different from older ones, and in what ways? 
+
+
+## Testing
+
+We can begin our investigation with some exploratory data analysis, using scatterplots to compare age with every other predictor (controlling for political party) to see if there any relationships which we can capture with regression.
+
+```{r}
+
+# Compare with chamber
+ggplot(data, aes(x = chamber, y = age, color = party)) + 
+  geom_point(size = 1) + 
+  labs(title = "Age and Chamber by Party", 
+       x = "Chamber", 
+       y = "Age", 
+       color = "Party")
+
+# Compare with State
+ggplot(data, aes(x = state_abbrev, y = age, color=party)) + 
+  geom_point(size = 1) + 
+  labs(title = "Age and State by Party", 
+       x = "State", 
+       y = "Age")
+
+# Compare with Ideological Score
+ggplot(data, aes(x = nominate_dim1, y = age, color = party)) + 
+  geom_point(size = 1) + 
+  labs(title = "Age and Ideology by Party", 
+       x = "Ideology Score", 
+       y = "Age")
+
+# Compare with Ideological Radicality Score
+ggplot(data, aes(x = nominate_dim2, y = age,color = party)) + 
+  geom_point(size = 1) + 
+  labs(title = "Age and Ideology Radicality by Party", 
+       x = "Ideology Radicality Score", 
+       y = "Age")
+
+
+# Compare with Ideological Score over Time
+ggplot(data, aes(x = nokken_poole_dim1, y = age, color = party)) + 
+  geom_point(size = 1) + 
+  labs(title = "Age and Ideological Drift by Party", 
+       x = "Ideology Change over Time", 
+       y = "Age")
+
+
+```
+
+
+As the EDA shows, controlling for party affiliation, there is no visible correlation between congress member age and ideological positioning in the current Congress. 
+
+This is further supported if we were to try linear regression, as shown below. We choose a range of important predictors like chamber, state, and ideological scores, and run a regresion on them.
+
+```{r}
+
+data <- data %>%
+  select(
+    age,                          # outcome variable
+    chamber,                      # House or Senate
+    state_abbrev,                 # state abbreviation
+    nominate_dim1,                # ideology dimension 1
+    nominate_dim2,                # ideology dimension 2
+    nokken_poole_dim1,           # alternative ideology measure 1
+    nokken_poole_dim2            # alternative ideology measure 2
+  ) %>%
+  na.omit() %>%  # Remove any remaining missing values
+  mutate(
+    chamber = as.factor(chamber),
+    state_abbrev = as.factor(state_abbrev)
+  )
+
+set.seed(380)
+
+train_index <- createDataPartition(data$age, p = 0.8, list = FALSE)
+train_data <- data[train_index, ]
+test_data <- data[-train_index, ]
+
+# Linear regression
+linear_model <- lm(age ~ ., data = train_data)
+
+summary(linear_model)
+
+
+```
+
+
+The multiple R-squared value is a measly 0.1811, and the adjusted R-squared is an even lower 0.05292. This communicates that a very small amount of the variance in the data is covered by our predictor variables, making them unfit to explain age. 
+
+
+
+## Interpretation
+
+
+It is well known that American Congressmembers skew on the old side. The median age is 59, and plenty of congressmembers are far older than this. Our analysis shows that this age is not related to location or ideology, party or chamber, suggesting that this high age is inbuilt into the institution itself. 
+
+Further studies would be needed to examine the aforementioned institution, probably through a study of national/state laws and party election rules. These, however, are beyond the scope of our project.
+
+
+
+
