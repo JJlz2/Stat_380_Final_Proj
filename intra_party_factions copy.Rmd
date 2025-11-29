@@ -1,0 +1,295 @@
+---
+title: "Intra-Party Factions with DW-NOMINATE (119th Congress)"
+author: "Group 1"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output:
+  pdf_document: 
+    latex_engine: xelatex
+  html_document: default
+  
+params:
+  infile: "HS119_members.csv"
+  which_chamber: "House"     # "House" or "Senate"
+  k_min: 2
+  k_max: 15
+  seed: 42
+---
+
+```{r setup, message=FALSE, warning=FALSE, include=TRUE}
+library(tidyverse)
+library(cluster)
+library(factoextra)  # fviz_nbclust helpers
+library(ggrepel)
+set.seed(params$seed)
+knitr::opts_chunk$set(comment = NA)
+```
+# Introduction
+This project analyzes ideological patterns in the 119th U.S. Congress (2025–2027) using NOMINATE data from Voteview. By examining how members are positioned along key ideological dimensions, we aim to better understand the structure of both major parties.
+
+Overall, our goal is to evaluate how congressional members cluster ideologically, how demographic factors such as age relate to their positions, and how consistently they align with their party in voting behavior. These analyses help reveal both internal party dynamics and broader patterns of polarization.
+
+# Data Description
+Our dataset comes from Voteview, which provides ideology estimates for every voting member of Congress based on their roll-call behavior. We focus on the 119th Congress (2025–2027) and use each member’s NOMINATE scores, a widely used measure of legislative ideology. The first dimension (nominate_dim1) places members on a liberal–conservative scale, while the second dimension (nominate_dim2) captures additional ideological variation often interpreted as establishment vs. populist tendencies.
+
+In addition to ideology scores, the dataset includes each member’s party affiliation, state and district, birth year, and identifying information such as name and ICPSR ID. These variables allow us to examine ideological clustering across parties, study demographic patterns such as age, and measure partisan voting behavior. Overall, the dataset provides a structured and quantitative foundation for analyzing congressional ideology and internal party dynamics.
+
+# Methodology
+
+# Data Analysis
+
+## Intra-Party Factions
+
+This report identifies **intra-party factions** within the 119th Congress using **DW-NOMINATE** coordinates. We cluster members **within each party** using k-means on `(Nominate_dim1, Nominate_dim2)` and validate with elbow and silhouette diagnostics.
+
+- `Nominate_dim1`: liberal (−) ↔ conservative (+)  
+- `Nominate_dim2`: often captures establishment (+) vs. populist (−) tendencies (modern era)
+
+## Load & Prepare Data
+
+```{r load}
+infile <- params$infile
+which_chamber <- params$which_chamber
+k_grid <- params$k_min:params$k_max
+
+df_raw <- readr::read_csv(infile, show_col_types = FALSE)
+
+# Basic sanity check for expected columns
+needed <- c("chamber","party_code","bioname","nominate_dim1","nominate_dim2")
+missing <- setdiff(needed, names(df_raw))
+if (length(missing) > 0) {
+  stop(paste("Missing required columns:", paste(missing, collapse=", ")))
+}
+
+df <- df_raw %>% 
+  filter(chamber == which_chamber) %>% 
+  select(bioname, party_code, chamber, nominate_dim1, nominate_dim2) %>%
+  filter(!is.na(nominate_dim1), !is.na(nominate_dim2))
+
+df_dem <- df %>% filter(party_code == 100)   # Democrats
+df_gop <- df %>% filter(party_code == 200)   # Republicans
+
+tibble(
+  party = c("Democrats","Republicans"),
+  N = c(nrow(df_dem), nrow(df_gop))
+)
+```
+
+## Method: Within-Party Clustering
+
+We choose `k` using **elbow (WSS)** and **average silhouette** over `k_grid`. Then we fit k-means and visualize a 2D cluster map.
+
+```{r helpers}
+fit_party_clusters <- function(df_party, party_label, k_grid = 2:5) {
+  if (nrow(df_party) < min(k_grid)) {
+    warning(paste0("Too few members in ", party_label, " for k>=2. Skipping."))
+    return(NULL)
+  }
+  X <- df_party %>% select(nominate_dim1, nominate_dim2)
+  
+  # Elbow
+  wss <- sapply(k_grid, function(k){
+    km <- kmeans(X, centers = k, nstart = 50)
+    km$tot.withinss
+  })
+  
+  # Silhouette
+  sil_avgs <- sapply(k_grid, function(k) {
+    km <- kmeans(X, centers = k, nstart = 50)
+    sil <- silhouette(km$cluster, dist(X))
+    mean(sil[, "sil_width"])
+  })
+  
+  #k_best <- k_grid[which.max(sil_avgs)]
+  k_best <- 3
+  km <- kmeans(X, centers = k_best, nstart = 200)
+  df_out <- df_party %>% mutate(cluster = factor(km$cluster))
+  
+  centers <- as_tibble(km$centers) %>% mutate(cluster = factor(1:n()))
+  
+  p_elbow <- tibble(k = k_grid, wss = wss) %>%
+    ggplot(aes(k, wss)) +
+    geom_line() + geom_point() +
+    labs(title = paste0(party_label, " – Elbow (WSS)"),
+         x = "k", y = "Total within-cluster SS") +
+    theme_minimal()
+  
+  p_sil <- tibble(k = k_grid, silhouette = sil_avgs) %>%
+    ggplot(aes(k, silhouette)) +
+    geom_line() + geom_point() +
+    labs(title = paste0(party_label, " – Average Silhouette by k"),
+         x = "k", y = "Average silhouette width") +
+    theme_minimal()
+  
+  p_map <- df_out %>%
+  ggplot(aes(nominate_dim1, nominate_dim2, color = cluster)) +
+  geom_point(size = 3, alpha = 0.9) +  # larger, clear points
+  # Mark cluster centers with an X
+  geom_point(data = centers, aes(nominate_dim1, nominate_dim2, color = cluster),
+             size = 6, shape = 4, stroke = 1.5, inherit.aes = FALSE) +
+  labs(
+    title = paste0(party_label, " – NOMINATE Cluster Map (k=", k_best, ")"),
+    subtitle = "Each point = Member of Congress; Color = Faction cluster center (X)",
+    x = "NOMINATE dim1 (Liberal − Conservative)",
+    y = "NOMINATE dim2 (Populist − Establishment)",
+    color = "Faction Cluster"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = "right",
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+  
+  list(
+    df = df_out,
+    centers = centers,
+    k_best = k_best,
+    silhouette_table = tibble(k = k_grid, avg_silhouette = sil_avgs),
+    elbow_plot = p_elbow,
+    silhouette_plot = p_sil,
+    map_plot = p_map
+  )
+}
+
+# Heuristic labeling rules — tweak after inspecting centers
+label_dem_cluster <- function(center_dim1, center_dim2) {
+  if (center_dim1 <= -0.55) return("Progressive")
+  if (center_dim1 >= -0.30 && center_dim2 >= 0.05) return("Blue Dog / Moderate-Establishment")
+  return("Mainline Moderate")
+}
+
+label_gop_cluster <- function(center_dim1, center_dim2) {
+  if (center_dim1 >= 0.60 && center_dim2 <= 0.00) return("Trump-aligned / Populist")
+  if (center_dim1 <= 0.35 && center_dim2 >= 0.05) return("Moderate / Establishment")
+  return("Traditional Conservative")
+}
+
+apply_labels <- function(res, party = c("D","R")) {
+  party <- match.arg(party)
+  if (is.null(res)) return(NULL)
+  centers_labeled <- res$centers %>% 
+    rowwise() %>% 
+    mutate(
+      faction = if (party == "D") 
+        label_dem_cluster(nominate_dim1, nominate_dim2) 
+      else 
+        label_gop_cluster(nominate_dim1, nominate_dim2)
+    ) %>% 
+    ungroup()
+  df_labeled <- res$df %>% 
+    left_join(centers_labeled %>% select(cluster, faction), by = "cluster")
+  list(members = df_labeled, centers = centers_labeled)
+}
+```
+
+## Democrats
+
+```{r, fig.width=7, fig.height=6}
+res_dem <- fit_party_clusters(df_dem, "Democrats", k_grid)
+if (!is.null(res_dem)) {
+  print(res_dem$elbow_plot)
+}
+```
+Since we start at k = 2, the WSS drops a lot when moving from 2 to 3 clusters(), drops a bit more at 3 to 4, and after that the curve flattens out — adding more clusters doesn’t really help much.
+```{r, fig.width=7, fig.height=6}
+if (!is.null(res_dem)) {
+  print(res_dem$silhouette_plot)
+}
+```
+The silhouette score is highest at k = 2, then it drops at k = 3 and 4, and after that it stays pretty flat with only small ups and downs. This basically means the clusters don’t get much clearer beyond 3–4 groups — adding more clusters doesn’t really improve separation.
+```{r, fig.width=7, fig.height=6}
+if (!is.null(res_dem)) {
+  print(res_dem$map_plot)
+}
+```
+Although the Democrats were split into three clusters in the k-means map (k = 3), this choice was made mainly to stay consistent with the research question. In fact, the silhouette plot shows that k = 2 has the highest average silhouette score, meaning two clusters provide the clearest separation according to the underlying NOMINATE distances.
+
+When we examine the numerical cluster centers, the three Democratic clusters are extremely close to each other. All three centers fall within a very narrow range.
+
+As a result, the labeling rules classify all three Democratic clusters as “Mainline Moderate,” indicating that the algorithm’s three-way split does not correspond to three meaningfully distinct ideological factions within the caucus.
+```{r, fig.width=7, fig.height=6}
+if (!is.null(res_dem)) {
+  out_dem <- apply_labels(res_dem, "D")
+  
+  cat("## Cluster Centers (Democrats)
+")
+  print(out_dem$centers %>% arrange(faction))
+  "~/Documents/GitHub/Stat_380_Final_Proj/HS119_members.csv"
+  cat("## Counts by Faction (Democrats)
+")
+  print(out_dem$members %>% count(faction, sort = TRUE))
+}
+```
+
+## Republicans
+
+```{r, fig.width=7, fig.height=6}
+res_gop <- fit_party_clusters(df_gop, "Republicans", k_grid)
+if (!is.null(res_gop)) {
+  print(res_gop$elbow_plot)
+}
+```
+The WSS curve shows its steepest drop from k = 2 to k = 3, meaning that’s where most of the improvement happens. After that, the decrease becomes more gradual, with a softer decline from k = 4 to 8, and then it flattens even further from k = 8 to 15, indicating diminishing returns as more clusters are added.
+```{r, fig.width=7, fig.height=6}
+if (!is.null(res_gop)) {
+  print(res_gop$silhouette_plot)
+}
+```
+The silhouette score peaks at k = 2, then drops sharply at k = 3 and stays noticeably lower for all larger k. From k = 4 through about k = 12, the silhouette values move within a tight band with only small ups and downs, showing no clear improvement as more clusters are added. The slight rise at k = 15 doesn’t change the overall pattern: the best separation occurs at k = 2, and adding more clusters mostly weakens the clustering structure rather than strengthening it.
+```{r, fig.width=7, fig.height=6}
+if (!is.null(res_gop)) {
+  print(res_gop$map_plot)
+}
+```
+With k = 3, the Republican NOMINATE map visually splits into three clusters, but the numerical results show that two of the clusters sit extremely close to each other in the ideological space and both represent the same mainstream “Traditional Conservative” group. The third cluster—located lower on the second dimension—is the only one that clearly separates, corresponding to a “Trump-aligned / Populist” faction. So even though the algorithm technically identifies three groups, the substantive interpretation is that Republicans largely divide into one major establishment bloc and a smaller Trump-aligned faction, with the two establishment clusters reflecting minor within-group variation rather than distinct ideological camps.
+```{r, fig.width=7, fig.height=6}
+if (!is.null(res_gop)) {
+  out_gop <- apply_labels(res_gop, "R")
+  
+  cat("## Cluster Centers (Republicans)
+")
+  print(out_gop$centers %>% arrange(faction))
+  
+  cat("## Counts by Faction (Republicans)
+")
+  print(out_gop$members %>% count(faction, sort = TRUE))
+}
+```
+## Members Closest to Each Faction Center
+
+```{r closest}
+closest_to_centers <- function(df_members, centers_tbl, top_n = 8) {
+  if (is.null(df_members)) return(invisible(NULL))
+  out <- list()
+  for (cl in centers_tbl$cluster) {
+    cen <- centers_tbl %>% filter(cluster == cl) %>% 
+      select(nominate_dim1, nominate_dim2) %>% as.numeric()
+    tmp <- df_members %>% 
+      filter(cluster == cl) %>% 
+      mutate(dist_to_center = sqrt((nominate_dim1 - cen[1])^2 + (nominate_dim2 - cen[2])^2)) %>% 
+      arrange(dist_to_center) %>% 
+      slice_head(n = top_n) %>% 
+      select(bioname, nominate_dim1, nominate_dim2, faction, dist_to_center)
+    out[[as.character(cl)]] <- tmp
+  }
+  out
+}
+
+if (exists("out_dem") && !is.null(out_dem)) {
+  cat("## Democrats — Examples Closest to Centers
+")
+  print(closest_to_centers(out_dem$members, out_dem$centers, 10))
+}
+if (exists("out_gop") && !is.null(out_gop)) {
+  cat("## Republicans — Examples Closest to Centers
+")
+  print(closest_to_centers(out_gop$members, out_gop$centers, 10))
+}
+```
+
+## Summary
+There is no clear point in either WSS plot where the total within-cluster sum of squares levels off; instead, both show a gradually flattening pattern as k increases. Silhouette scores above 0.7 indicate strong clustering and scores above 0.5 indicate reasonable clustering, yet for both Republicans and Democrats, the highest silhouette value occurs at k = 2 and remains below 0.5. This suggests that neither party exhibits a meaningful clustering structure. Although k = 3 was chosen to match the requirements of the research question, the more appropriate choice based on the metrics would be k = 2. Furthermore, the resulting NOMINATE dimension analysis shows that the ideological separation is not very distinct: while we expected three ideological levels for both parties, the actual clustering reveals fewer than three clearly differentiated ideological groups.
+
+
