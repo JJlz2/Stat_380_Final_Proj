@@ -1,4 +1,8 @@
 
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
 data <- S118_votes
 votes <- subset(data, select = -c(congress, chamber, prob))
 votes$cast_code = votes$cast_code == 1
@@ -28,8 +32,6 @@ icpsr_coords <- data.frame(
 colnames(mat)
 
 
-
-library(dplyr)
 S118_members$icpsr <- as.character(S118_members$icpsr)
 head(S118_members)
 head(icpsr_coords)
@@ -65,36 +67,39 @@ d <- decomp$d
 pve <- d^2 / sum(d^2)
 tot_pve <- cumsum(pve)
  
+
+# PC scree matrix
 options(scipen = 999)
+par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
 plot(pve, type = "b", pch = 19,
      xlab = "Component number",
      ylab = "Proportion of Variance Explained",
-     main = "Scree Plot (Variance Explained by SVD Components)")
+     main = "Variance Explained by Custom Components")
 
 plot(pve, type = "b", pch = 19,
      xlab = "Component number",
      ylab = "Proportion of Variance Explained ( log )",
-     main = "Scree Plot (Variance Explained by SVD Components)",
+     main = "Variance Explained by Custom Components",
      log = "y")
 
 plot(1-tot_pve, type = "b", pch = 19,
      xlab = "Component number",
      ylab = "Cumulative Variance Unexplained",
-     main = "Cumulative Variance Unexplained by Components")
+     main = "Cumulative Var Unexplained by Components")
 
 plot(1-tot_pve, type = "b", pch = 19,
      xlab = "Component number",
      ylab = "Cumulative Variance Unexplained ( log )",
-     main = "Cumulative Variance Unexplained by Components",
+     main = "Cumulative Var Unexplained by Components",
      log = "y")
 
 
+# corrilation scores
 S118_rollcalls$icpsr <- as.character(S118_rollcalls$icpsr)
 
-cor(named_icpsr$X, named_icpsr$nominate_dim1, use = "complete.obs")
-cor(named_icpsr$Y, named_icpsr$nominate_dim2, use = "complete.obs")
-
-
+score_data <- named_icpsr[, c("X", "Y", "nominate_dim1", "nominate_dim2")]
+cor_matrix <- cor(score_data, use = "complete.obs")
+print(cor_matrix)
 
 custom_dims <- c("X", "Y")
 nom_dims    <- c("nominate_dim1", "nominate_dim2")
@@ -123,19 +128,18 @@ for (c_dim in custom_dims) {
 }
 
 
-# Plot 1: Custom SVD scores
+# ploting scores
 plot(named_icpsr$X, named_icpsr$Y,
      pch = 19,
      col = named_icpsr$party_color,
-     xlab = "Custom Dimension 1",
-     ylab = "Custom Dimension 2",
-     main = "Custom SVD Scores")
+     xlab = "X",
+     ylab = "Y",
+     main = "Custom Scores")
 
 text(named_icpsr$X, named_icpsr$Y,
      labels = named_icpsr$bioname,
      pos = 3, cex = 0.6)
 
-# Plot 2: NOMINATE scores
 plot(named_icpsr$nominate_dim1, named_icpsr$nominate_dim2,
      pch = 19,
      col = named_icpsr$party_color,
@@ -147,12 +151,86 @@ text(named_icpsr$nominate_dim1, named_icpsr$nominate_dim2,
      labels = named_icpsr$bioname,
      pos = 3, cex = 0.6)
 
+# getting corrilation
 cor(named_icpsr$X, named_icpsr$nominate_dim1, use = "complete.obs")
 cor(named_icpsr$X, named_icpsr$nominate_dim2, use = "complete.obs")
 cor(named_icpsr$Y, named_icpsr$nominate_dim2, use = "complete.obs")
 cor(named_icpsr$Y, named_icpsr$nominate_dim1, use = "complete.obs")
 
-summary(lm(nominate_dim1 ~ X + Y, data = named_icpsr))
-summary(lm(nominate_dim2 ~ X + Y, data = named_icpsr))
+# finding acc and conf
+S118_votes$icpsr <- as.character(S118_votes$icpsr)
+named_icpsr$icpsr <- as.character(named_icpsr$icpsr)
 
+results <- list()
+
+for (roll in unique(S118_votes$rollnumber)) {
+  
+  votes_sub <- S118_votes |>
+    filter(rollnumber == roll) |>
+    left_join(named_icpsr, by = "icpsr") |>
+    filter(!is.na(X), !is.na(nominate_dim1))
+  
+  if (nrow(votes_sub) == 0) next
+  
+  votes_sub$cast_bin <- ifelse(votes_sub$cast_code == 1, 1, 0)
+  
+  glm_custom <- glm(cast_bin ~ X + Y, data = votes_sub, family = binomial)
+  prob_custom <- predict(glm_custom, type = "response")
+  pred_custom <- ifelse(prob_custom > 0.5, 1, 0)
+  acc_custom <- mean(pred_custom == votes_sub$cast_bin, na.rm = TRUE)
+  conf_custom <- mean(abs(prob_custom - 0.5), na.rm = TRUE)
+  
+  glm_nom <- glm(cast_bin ~ nominate_dim1 + nominate_dim2, data = votes_sub, family = binomial)
+  prob_nom <- predict(glm_nom, type = "response")
+  pred_nom <- ifelse(prob_nom > 0.5, 1, 0)
+  acc_nom <- mean(pred_nom == votes_sub$cast_bin, na.rm = TRUE)
+  conf_nom <- mean(abs(prob_nom - 0.5), na.rm = TRUE)
+  
+  results[[as.character(roll)]] <- data.frame(
+    rollnumber = roll,
+    acc_custom, acc_nom,
+    conf_custom, conf_nom
+  )
+}
+
+results_df <- do.call(rbind, results)
+head(results_df)
+summary(results_df)
+
+# acc and conf matrix
+results_long <- results_df %>%
+  select(acc_custom, acc_nom, conf_custom, conf_nom) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("metric", "system"),
+    names_sep = "_",
+    values_to = "value"
+  )
+
+results_df <- results_df[, !(names(results_df) %in% "rollnumber")]
+col_means <- sapply(results_df, mean, na.rm = TRUE)
+col_vars <- sapply(results_df, var, na.rm = TRUE)
+summary_stats <- data.frame(
+  Mean = col_means,
+  Variance = col_vars
+)
+
+summary_stats
+
+#t-test
+t.test(results_df$acc_custom, results_df$acc_nom, paired = TRUE)
+t.test(results_df$conf_custom, results_df$conf_nom, paired = TRUE)
+
+# plots for acc and conf
+ggplot(results_long, aes(x = value, color = system)) +
+  geom_density(size = 1) +
+  facet_wrap(~metric, scales = "free") +
+  scale_color_manual(values = c("blue", "red"), labels = c("Custom", "NOMINATE")) +
+  labs(
+    x = "Value",
+    y = "Density",
+    color = "Scoring System",
+    title = "Density of Vote Prediction Accuracy and Confidence"
+  ) +
+  theme_minimal()
 
