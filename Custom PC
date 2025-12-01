@@ -1,0 +1,158 @@
+
+data <- S118_votes
+votes <- subset(data, select = -c(congress, chamber, prob))
+votes$cast_code = votes$cast_code == 1
+
+mat <- xtabs( cast_code ~ rollnumber + icpsr , data = votes)
+mat
+
+decomp <- svd(mat)
+decomp$u
+decomp$d
+decomp$v
+
+k = 3
+
+d <- decomp$d[1:2]
+U2 <- decomp$u[, 1:2, drop = FALSE]
+V2 <- decomp$v[, 1:2, drop = FALSE]
+
+U_scaled <- U2 %*% diag(sqrt(d))
+V_scaled <- V2 %*% diag(sqrt(d))
+
+icpsr_coords <- data.frame(
+  icpsr = as.character(colnames(mat)),
+  X = V_scaled[,1],
+  Y = V_scaled[,2]
+)
+colnames(mat)
+
+
+
+library(dplyr)
+S118_members$icpsr <- as.character(S118_members$icpsr)
+head(S118_members)
+head(icpsr_coords)
+named_icpsr <- left_join(icpsr_coords, S118_members, by = 'icpsr')
+
+named_icpsr$party_color <- ifelse(
+  named_icpsr$party_code == 200, "red",
+  ifelse(named_icpsr$party_code == 100, "blue", "purple")
+)
+
+plot(
+  named_icpsr$X, named_icpsr$Y,
+  pch = 19,
+  col = named_icpsr$party_color,
+  xlab = "Component 1",
+  ylab = "Component 2",
+  main = "Rank-2 Embedding of Legislators (icpsr)"
+)
+
+
+text(named_icpsr$X, named_icpsr$Y,
+     labels = named_icpsr$bioname,
+     pos = 3, cex = 0.7)
+
+
+rows <- grep("CORR", named_icpsr$bioname)
+named_icpsr[rows, ]
+
+
+
+# testing model strength
+d <- decomp$d
+pve <- d^2 / sum(d^2)
+tot_pve <- cumsum(pve)
+ 
+options(scipen = 999)
+plot(pve, type = "b", pch = 19,
+     xlab = "Component number",
+     ylab = "Proportion of Variance Explained",
+     main = "Scree Plot (Variance Explained by SVD Components)")
+
+plot(pve, type = "b", pch = 19,
+     xlab = "Component number",
+     ylab = "Proportion of Variance Explained ( log )",
+     main = "Scree Plot (Variance Explained by SVD Components)",
+     log = "y")
+
+plot(1-tot_pve, type = "b", pch = 19,
+     xlab = "Component number",
+     ylab = "Cumulative Variance Unexplained",
+     main = "Cumulative Variance Unexplained by Components")
+
+plot(1-tot_pve, type = "b", pch = 19,
+     xlab = "Component number",
+     ylab = "Cumulative Variance Unexplained ( log )",
+     main = "Cumulative Variance Unexplained by Components",
+     log = "y")
+
+
+S118_rollcalls$icpsr <- as.character(S118_rollcalls$icpsr)
+
+cor(named_icpsr$X, named_icpsr$nominate_dim1, use = "complete.obs")
+cor(named_icpsr$Y, named_icpsr$nominate_dim2, use = "complete.obs")
+
+
+
+custom_dims <- c("X", "Y")
+nom_dims    <- c("nominate_dim1", "nominate_dim2")
+
+for (c_dim in custom_dims) {
+  for (n_dim in nom_dims) {
+    
+    plot(
+      named_icpsr[[c_dim]],
+      named_icpsr[[n_dim]],
+      pch = 19,
+      col = named_icpsr$party_color,
+      xlab = paste("Custom", c_dim),
+      ylab = paste("NOMINATE", n_dim),
+      main = paste(c_dim, "vs", n_dim)
+    )
+    
+    text(
+      named_icpsr[[c_dim]],
+      named_icpsr[[n_dim]],
+      labels = named_icpsr$bioname,
+      pos = 3,
+      cex = 0.6
+    )
+  }
+}
+
+
+# Plot 1: Custom SVD scores
+plot(named_icpsr$X, named_icpsr$Y,
+     pch = 19,
+     col = named_icpsr$party_color,
+     xlab = "Custom Dimension 1",
+     ylab = "Custom Dimension 2",
+     main = "Custom SVD Scores")
+
+text(named_icpsr$X, named_icpsr$Y,
+     labels = named_icpsr$bioname,
+     pos = 3, cex = 0.6)
+
+# Plot 2: NOMINATE scores
+plot(named_icpsr$nominate_dim1, named_icpsr$nominate_dim2,
+     pch = 19,
+     col = named_icpsr$party_color,
+     xlab = "NOMINATE Dimension 1",
+     ylab = "NOMINATE Dimension 2",
+     main = "NOMINATE Scores")
+
+text(named_icpsr$nominate_dim1, named_icpsr$nominate_dim2,
+     labels = named_icpsr$bioname,
+     pos = 3, cex = 0.6)
+
+cor(named_icpsr$X, named_icpsr$nominate_dim1, use = "complete.obs")
+cor(named_icpsr$X, named_icpsr$nominate_dim2, use = "complete.obs")
+cor(named_icpsr$Y, named_icpsr$nominate_dim2, use = "complete.obs")
+cor(named_icpsr$Y, named_icpsr$nominate_dim1, use = "complete.obs")
+
+summary(lm(nominate_dim1 ~ X + Y, data = named_icpsr))
+summary(lm(nominate_dim2 ~ X + Y, data = named_icpsr))
+
+
